@@ -10,6 +10,7 @@ const io = new Server(server);
 app.use(express.static(path.join(__dirname, 'public')));
 
 const rooms = {};
+const safeSpots = [1, 10, 20, 30, 40];
 
 function createDeck() {
   const suits = ['♠️', '♥️', '♦️', '♣️'];
@@ -44,16 +45,54 @@ function evaluateHand(cards) {
   return 100 + r1;
 }
 
+function processTurn(roomId) {
+  const room = rooms[roomId];
+  if (!room || room.players.length === 0) return;
+
+  const currentPlayer = room.players[room.turnIndex];
+  const diceValue = Math.floor(Math.random() * 6) + 1;
+  currentPlayer.ludoPos += diceValue;
+
+  let cutMessage = '';
+  if (!safeSpots.includes(currentPlayer.ludoPos) && currentPlayer.ludoPos < 40) {
+    room.players.forEach(p => {
+      if (p.id !== currentPlayer.id && p.ludoPos === currentPlayer.ludoPos && p.ludoPos > 0) {
+        p.ludoPos = 0;
+        cutMessage = ` 💥 ${currentPlayer.name} ने ${p.name} की गोटी काट दी!`;
+      }
+    });
+  }
+
+  let winner = null;
+  if (currentPlayer.ludoPos >= 40) {
+    currentPlayer.ludoPos = 40;
+    currentPlayer.coins += room.pot;
+    winner = `${currentPlayer.name} (+${room.pot} Coins)`;
+    room.pot = 0;
+  }
+
+  if (diceValue !== 6 && !winner) {
+    room.turnIndex = (room.turnIndex + 1) % room.players.length;
+  }
+
+  io.to(roomId).emit('diceResult', {
+    player: currentPlayer.name,
+    dice: diceValue,
+    cutMessage: cutMessage,
+    room: room,
+    winner: winner
+  });
+
+  if (!winner && room.players[room.turnIndex] && room.players[room.turnIndex].isBot) {
+    setTimeout(() => processTurn(roomId), 1500);
+  }
+}
+
 io.on('connection', (socket) => {
   socket.on('joinRoom', ({ roomId, playerName }) => {
     socket.join(roomId);
     if (!rooms[roomId]) {
-      rooms[roomId] = {
-        players: [],
-        gameMode: 'ludo',
-        turnIndex: 0,
-        pot: 0
-      };
+      rooms[roomId] = { players: [], gameMode: 'ludo', turnIndex: 0, pot: 0 };
     }
 
     const room = rooms[roomId];
@@ -63,19 +102,32 @@ io.on('connection', (socket) => {
     }
 
     const colors = ['#ff4d4d', '#2ecc71', '#f1c40f', '#3498db'];
-    const colorNames = ['Red', 'Green', 'Yellow', 'Blue'];
-
-    const player = {
+    room.players.push({
       id: socket.id,
       name: playerName || `Player ${room.players.length + 1}`,
       color: colors[room.players.length],
-      colorName: colorNames[room.players.length],
       coins: 1000,
       ludoPos: 0,
-      cards: []
-    };
+      cards: [],
+      isBot: false
+    });
 
-    room.players.push(player);
+    io.to(roomId).emit('updateRoom', room);
+  });
+
+  socket.on('addBot', (roomId) => {
+    const room = rooms[roomId];
+    if (!room || room.players.length >= 4) return;
+    const colors = ['#ff4d4d', '#2ecc71', '#f1c40f', '#3498db'];
+    room.players.push({
+      id: 'bot_' + Date.now(),
+      name: '🤖 Robo Bot',
+      color: colors[room.players.length],
+      coins: 1000,
+      ludoPos: 0,
+      cards: [],
+      isBot: true
+    });
     io.to(roomId).emit('updateRoom', room);
   });
 
@@ -99,7 +151,7 @@ io.on('connection', (socket) => {
   socket.on('startLudoMatch', (roomId) => {
     const room = rooms[roomId];
     if (!room || room.players.length < 2) {
-      socket.emit('errorMsg', 'खेलने के लिए कम से कम 2 खिलाड़ी चाहिए!');
+      socket.emit('errorMsg', 'खेलने के लिए कम से कम 2 खिलाड़ी चाहिए (या Add Bot दबाएं)!');
       return;
     }
     room.pot = 0;
@@ -117,31 +169,9 @@ io.on('connection', (socket) => {
   socket.on('rollDice', (roomId) => {
     const room = rooms[roomId];
     if (!room || room.players.length === 0) return;
-
     const currentPlayer = room.players[room.turnIndex];
     if (currentPlayer.id !== socket.id) return;
-
-    const diceValue = Math.floor(Math.random() * 6) + 1;
-    currentPlayer.ludoPos += diceValue;
-
-    let winner = null;
-    if (currentPlayer.ludoPos >= 40) {
-      currentPlayer.ludoPos = 40;
-      currentPlayer.coins += room.pot;
-      winner = `${currentPlayer.name} (+${room.pot} Coins)`;
-      room.pot = 0;
-    }
-
-    if (diceValue !== 6 && !winner) {
-      room.turnIndex = (room.turnIndex + 1) % room.players.length;
-    }
-
-    io.to(roomId).emit('diceResult', {
-      player: currentPlayer.name,
-      dice: diceValue,
-      room: room,
-      winner: winner
-    });
+    processTurn(roomId);
   });
 
   socket.on('dealCards', (roomId) => {
@@ -150,7 +180,6 @@ io.on('connection', (socket) => {
       socket.emit('errorMsg', 'कार्ड गेम के लिए कम से कम 2 खिलाड़ी चाहिए!');
       return;
     }
-
     const deck = createDeck();
     room.pot = 0;
     room.players.forEach((p) => {
@@ -160,17 +189,14 @@ io.on('connection', (socket) => {
       }
       p.cards = [deck.pop(), deck.pop(), deck.pop()];
     });
-
     io.to(roomId).emit('cardsDealt', room);
   });
 
   socket.on('showCards', (roomId) => {
     const room = rooms[roomId];
     if (!room) return;
-
     let bestScore = -1;
     let winnerPlayer = null;
-
     room.players.forEach(p => {
       const score = evaluateHand(p.cards);
       if (score > bestScore) {
@@ -178,7 +204,6 @@ io.on('connection', (socket) => {
         winnerPlayer = p;
       }
     });
-
     if (winnerPlayer) {
       winnerPlayer.coins += room.pot;
       const winAmount = room.pot;
@@ -194,7 +219,8 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     for (let roomId in rooms) {
       rooms[roomId].players = rooms[roomId].players.filter(p => p.id !== socket.id);
-      if (rooms[roomId].players.length === 0) {
+      const realPlayers = rooms[roomId].players.filter(p => !p.isBot);
+      if (realPlayers.length === 0) {
         delete rooms[roomId];
       } else {
         rooms[roomId].turnIndex = 0;
@@ -206,4 +232,3 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-        
