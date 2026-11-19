@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Royal Ludo & Card Club</title>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: white; text-align: center; margin: 0; padding: 15px; }
+    .box { background: #1e293b; padding: 20px; border-radius: 16px; max-width: 520px; margin: auto; box-shadow: 0 8px 25px rgba(0,0,0,0.6); }
+    input, button { padding: 11px 16px; margin: 6px; border-radius: 8px; border: none; font-size: 15px; }
+    button { background: #e11d48; color: white; cursor: pointer; font-weight: bold; transition: 0.2s; }
+    button:hover { transform: scale(1.03); background: #be123c; }
+    .mode-btn { background: #334155; }
+    .active-mode { background: #16a34a !important; }
+    .coin-badge { background: #f59e0b; color: #000; padding: 4px 10px; border-radius: 20px; font-weight: bold; font-size: 14px; }
+    .pot-box { background: #0f172a; border: 2px solid #f59e0b; padding: 8px; border-radius: 10px; margin: 10px 0; font-size: 18px; color: #fbbf24; }
+    .player-card { background: #334155; padding: 10px 14px; margin: 6px 0; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; }
+    .card-box { font-size: 24px; background: white; color: black; padding: 10px 14px; border-radius: 8px; margin: 0 5px; display: inline-block; font-weight: bold; box-shadow: 0 4px 8px rgba(0,0,0,0.4); }
+    .hidden { display: none; }
+
+    /* Visual Ludo Board Grid */
+    .ludo-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; background: #0f172a; padding: 10px; border-radius: 12px; margin: 15px auto; max-width: 400px; border: 3px solid #475569; }
+    .cell { aspect-ratio: 1; background: #334155; border-radius: 4px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; font-size: 10px; color: #94a3b8; position: relative; }
+    .cell-safe { background: #475569; border: 1px solid #fbbf24; }
+    .cell-home { background: linear-gradient(45deg, #ff4d4d, #2ecc71, #f1c40f, #3498db); color: white; font-weight: bold; }
+    .token { width: 14px; height: 14px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px black; }
+    
+    /* Ad Banner Placeholder */
+    .ad-slot { background: #0f172a; border: 1px dashed #64748b; color: #94a3b8; padding: 10px; margin-top: 15px; border-radius: 8px; font-size: 12px; }
+  </style>
+</head>
+<body>
+
+  <div class="box" id="loginScreen">
+    <h2>👑 Royal Ludo & 🃏 Card Club</h2>
+    <p style="color:#94a3b8;">जुड़ने पर पाएं 1,000 फ्री कॉइन्स!</p>
+    <input type="text" id="playerName" placeholder="अपना नाम लिखें" /><br>
+    <input type="text" id="roomId" placeholder="रूम कोड (जैसे: 1234)" /><br>
+    <button onclick="joinGame()">गेम में प्रवेश करें</button>
+  </div>
+
+  <div class="box hidden" id="gameScreen">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span>रूम: <b id="displayRoom"></b></span>
+      <button style="background:#f59e0b; color:black; padding:6px 12px; font-size:13px;" onclick="claimCoins()">+500 Free Coins 🎁</button>
+    </div>
+
+    <div class="pot-box">🏆 मैच इनाम (Pot): <b id="potDisplay">0</b> Coins</div>
+
+    <div>
+      <button id="btnLudo" class="mode-btn active-mode" onclick="switchMode('ludo')">🎲 Ludo Board</button>
+      <button id="btnCard" class="mode-btn" onclick="switchMode('cards')">🃏 Teen Patti Cards</button>
+    </div>
+
+    <div id="playersList" style="margin-top:10px;"></div>
+
+    <!-- LUDO SECTION -->
+    <div id="ludoSection">
+      <div style="margin-top:10px;">
+        <button style="background:#0284c7;" onclick="startLudo()">नया मैच शुरू करें (100 Coins)</button>
+      </div>
+      <h4 id="turnInfo" style="margin:8px 0; color:#38bdf8;">बारी: ...</h4>
+      
+      <div class="ludo-grid" id="ludoBoard"></div>
+
+      <h2 id="diceDisplay" style="margin:5px 0;">🎲</h2>
+      <button onclick="rollDice()" style="width:80%; font-size:18px;">पासा फेंकें (Roll Dice)</button>
+    </div>
+
+    <!-- CARD GAME SECTION -->
+    <div id="cardSection" class="hidden">
+      <h3>🃏 3-Patti Showdown</h3>
+      <button style="background:#0284c7;" onclick="dealCards()">पत्ते बांटें (100 Coins दांव)</button>
+      <button style="background:#16a34a;" onclick="showCards()">Show करें (विजेता चुनें)</button>
+      
+      <div id="myCards" style="margin-top: 20px;"></div>
+      <div id="allCardsResult" style="margin-top: 15px; font-size: 14px; color: #fbbf24;"></div>
+    </div>
+
+    <div class="ad-slot">
+      📢 Advertisement Space (यहाँ आप Google AdSense / Adsterra कोड लगाकर कमाई करेंगे)
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    let currentRoom = '';
+
+    function buildBoard(players = []) {
+      const board = document.getElementById('ludoBoard');
+      board.innerHTML = '';
+      for (let i = 1; i <= 40; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        if (i % 10 === 0 && i !== 40) cell.classList.add('cell-safe');
+        if (i === 40) {
+          cell.classList.add('cell-home');
+          cell.innerText = 'WIN';
+        } else {
+          cell.innerText = i;
+        }
+
+        players.forEach(p => {
+          if (p.ludoPos === i) {
+            const token = document.createElement('div');
+            token.className = 'token';
+            token.style.backgroundColor = p.color;
+            token.title = p.name;
+            cell.appendChild(token);
+          }
+        });
+        board.appendChild(cell);
+      }
+    }
+
+    function joinGame() {
+      const playerName = document.getElementById('playerName').value;
+      const roomId = document.getElementById('roomId').value;
+      if (!playerName || !roomId) return alert('नाम और रूम कोड डालें!');
+      
+      currentRoom = roomId;
+      document.getElementById('displayRoom').innerText = roomId;
+      socket.emit('joinRoom', { roomId, playerName });
+
+      document.getElementById('loginScreen').classList.add('hidden');
+      document.getElementById('gameScreen').classList.remove('hidden');
+      buildBoard();
+    }
+
+    function claimCoins() {
+      socket.emit('claimFreeCoins', currentRoom);
+      alert('🎁 आपको 500 फ्री कॉइन्स मिल गए!');
+    }
+
+    function switchMode(mode) {
+      socket.emit('switchGame', { roomId: currentRoom, mode });
+    }
+
+    function startLudo() {
+      socket.emit('startLudoMatch', currentRoom);
+    }
+
+    function rollDice() {
+      socket.emit('rollDice', currentRoom);
+    }
+
+    function dealCards() {
+      document.getElementById('allCardsResult').innerText = '';
+      socket.emit('dealCards', currentRoom);
+    }
+
+    function showCards() {
+      socket.emit('showCards', currentRoom);
+    }
+
+    socket.on('errorMsg', (msg) => alert(msg));
+    socket.on('updateRoom', (room) => renderRoom(room));
+    socket.on('ludoStarted', (room) => {
+      document.getElementById('diceDisplay').innerText = '🎲 मैच शुरू! पासा फेंकें';
+      renderRoom(room);
+    });
+
+    socket.on('diceResult', ({ player, dice, room, winner }) => {
+      document.getElementById('diceDisplay').innerText = `🎲 ${player} का आया: ${dice}`;
+      renderRoom(room);
+      if (winner) alert(`🏆 शानदार जीत! ${winner}`);
+    });
+
+    socket.on('cardsDealt', (room) => renderRoom(room));
+
+    socket.on('cardWinner', ({ winnerName, winAmount, room }) => {
+      renderRoom(room);
+      let summary = `🏆 विजेता: ${winnerName} ने जीते ${winAmount} Coins!\n\nसभी के पत्ते:\n`;
+      room.players.forEach(p => {
+        summary += `${p.name}: ${p.cards.map(c => c.text).join(' ')} | `;
+      });
+      document.getElementById('allCardsResult').innerText = summary;
+    });
+
+    function renderRoom(room) {
+      document.getElementById('potDisplay').innerText = room.pot;
+
+      if (room.gameMode === 'ludo') {
+        document.getElementById('ludoSection').classList.remove('hidden');
+        document.getElementById('cardSection').classList.add('hidden');
+        document.getElementById('btnLudo').classList.add('active-mode');
+        document.getElementById('btnCard').classList.remove('active-mode');
+      } else {
+        document.getElementById('ludoSection').classList.add('hidden');
+        document.getElementById('cardSection').classList.remove('hidden');
+        document.getElementById('btnCard').classList.add('active-mode');
+        document.getElementById('btnLudo').classList.remove('active-mode');
+      }
+
+      const listDiv = document.getElementById('playersList');
+      listDiv.innerHTML = '';
+      room.players.forEach((p, idx) => {
+        const isTurn = idx === room.turnIndex ? '👈' : '';
+        listDiv.innerHTML += `
+          <div class="player-card" style="border-left: 6px solid ${p.color};">
+            <span><b>${p.name}</b> ${isTurn} (कदम: ${p.ludoPos}/40)</span>
+            <span class="coin-badge">🪙 ${p.coins}</span>
+          </div>
+        `;
+
+        if (p.id === socket.id && p.cards.length > 0) {
+          document.getElementById('myCards').innerHTML = p.cards.map(c => {
+            const isRed = c.suit === '♥️' || c.suit === '♦️';
+            return `<span class="card-box" style="color:${isRed ? '#dc2626' : '#0f172a'}">${c.text}</span>`;
+          }).join('');
+        }
+      });
+
+      if (room.players[room.turnIndex]) {
+        document.getElementById('turnInfo').innerText = `अभी बारी है: ${room.players[room.turnIndex].name}`;
+      }
+
+      buildBoard(room.players);
+    }
+  </script>
+</body>
+</html>
